@@ -146,9 +146,16 @@ class Encoder(nn.Module):
         self.config = BertConfig()
         self.embeddings = BertEmbeddings(config=self.config)
         self.visn_fc = VisualFeatEncoder(config=self.config)
+        self.v2a_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
+        self.c2a_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
+        self.cv2a_fc = nn.Linear(self.config.hidden_size, 1)
+        self.relu = nn.ReLU()
+        self.v2h_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
+        self.c2h_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
 
 
     def forward(self, compositions, feat, pos, visual_attention_mask=None):
+        bs = feat.size(0)
         train_features = convert_sents_to_features(compositions, self.max_seq_length, self.tokenizer)
 
         input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long).cuda()
@@ -157,11 +164,30 @@ class Encoder(nn.Module):
 
         embedding_output = self.embeddings(input_ids, token_type_ids=segment_ids)
         visn_feats = self.visn_fc(feat, pos)
-        # 平均をとる
-        visn_feats = visn_feats.mean(dim=1)
-        embedding_output = embedding_output.mean(dim=1)
+        assert visn_feats.shape == (bs, 36, self.config.hidden_size) # (bs, 36, 768)
+        assert embedding_output.shape == (bs, self.max_seq_length, self.config.hidden_size) # (bs, 30, 768)
+
+        if args.bert_embedding == "mean":
+            # 平均をとる
+            embedding_output = embedding_output.mean(dim=1)
+        elif args.bert_embedding == "cls":
+            # CLSをとる
+            embedding_output = embedding_output[:, 0, :]
+        assert embedding_output.shape == (bs, self.config.hidden_size) # (bs, 768)
+
+        # attention
+        vc_features = self.relu(self.v2a_fc(visn_feats)) * self.relu(self.c2a_fc(embedding_output.unsqueeze(1))) # (bs, 36, 768)
+        tau = self.cv2a_fc(vc_features).squeeze() # (bs, 36)
+        assert tau.shape == (bs, visn_feats.shape[1])
+        alpha = F.softmax(tau, dim=1) # (bs, 36)
+        assert round(sum(alpha.sum(dim=1)).item()) == bs
+        attention_visn_feats = torch.mul(alpha.unsqueeze(2), visn_feats) # (bs, 36, 768) -> これでええのか？
+        attention_visn_feats = attention_visn_feats.sum(dim=1).squeeze() # (bs, 768)
+        assert attention_visn_feats.shape == (bs, self.config.hidden_size)
+
         # concat
-        features = torch.cat((embedding_output, visn_feats), dim=1)
+        features = self.relu(self.v2h_fc(attention_visn_feats)) * self.relu(self.c2h_fc(embedding_output))
+        assert features.shape == (bs, self.config.hidden_size)
 
         return features
 
@@ -182,36 +208,24 @@ class LSTMDecoder(nn.Module):
         
     def forward(self, features, corrections, lengths):
         """Decode feature vectors and generates corrections."""
-        # print("corrections",corrections.shape)
-        # print(corrections) # 256,29
+        assert corrections.shape == (features.shape[0], self.max_seq_length - 1) # (batch_size, 29)
+        # pack_padded_sequenceに投げるために，訂正結果のそれぞれの長さを管理
         lengths = [self.max_seq_length-1 if l > self.max_seq_length-1 else l for l in lengths]
-        # print("lengths",lengths)
         embeddings = self.embed(corrections) # 256, 29 -> 256, 29, 1536
-        # print("featuresのサイズ")
-        # print(features.size()) # 256, 1536
-        # print("features.unsqueeze(1)のサイズ")
-        # print(features.unsqueeze(1).size()) # 256, 1, 1536
-        # print("embeddingsのサイズ") # 256, 29, 1536
-        # print(embeddings.size())
+        assert embeddings.shape == (features.shape[0], self.max_seq_length - 1, self.embed_size) 
+        assert features.shape == (corrections.shape[0], self.embed_size) # 256, 1536
         bs = embeddings.shape[0]
-        # print("embeddings", embeddings.shape) # 256, 29, 1536
-        assert embeddings.shape == (corrections.shape[0], corrections.shape[1], self.embed_size)
-         
         packed = pack_padded_sequence(embeddings, lengths, batch_first=True)
         hiddens, _ = self.lstm(packed, (features.view(self.num_layers, bs, self.hidden_size), features.view(self.num_layers, bs, self.hidden_size)))
         # print("lstmに突っ込んだ後のhiddenがこれ")
         # print(hiddens)
         # print(hiddens[0].size())
-
         hiddens = pad_packed_sequence(hiddens, batch_first=True)
         # print(hiddens[0].size())
-        outputs = self.linear(hiddens[0])
+        # print(hiddens[0].size())
+        outputs = self.linear(hiddens[0]) # 29まであるとは限らない
         total_outputs = torch.zeros(bs, self.max_seq_length, self.vocab_size).cuda()
-        # print(total_outputs.size())
-        # print("outputs", outputs.shape)
-        # print(total_outputs[:,1:outputs.shape[1]+1,:].shape)
         total_outputs[:,1:outputs.shape[1]+1,:] = outputs
-        # print("outputs",outputs.size())
         return total_outputs
     
     def samples(self, features, states=None):
@@ -241,7 +255,7 @@ class Model(nn.Module):
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         vocab_size = len(self.tokenizer.vocab)
         self.encoder = Encoder(args, max_seq_length=30, tokenizer=self.tokenizer)
-        self.decoder = LSTMDecoder(embed_size=1536, hidden_size=1536, vocab_size=vocab_size)
+        self.decoder = LSTMDecoder(embed_size=768, hidden_size=768, vocab_size=vocab_size)
 
     def forward(self, feat, pos, composition, correction, lengths):
         features = self.encoder(composition, feat, pos)
