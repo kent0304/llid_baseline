@@ -166,28 +166,58 @@ class Encoder(nn.Module):
         visn_feats = self.visn_fc(feat, pos)
         assert visn_feats.shape == (bs, 36, self.config.hidden_size) # (bs, 36, 768)
         assert embedding_output.shape == (bs, self.max_seq_length, self.config.hidden_size) # (bs, 30, 768)
-
+        # print("input_ids: ", input_ids)
+        # print("input_mask: ", input_mask)
+        # print("segment_ids: ", segment_ids)
+     
         if args.bert_embedding == "mean":
             # 平均をとる
-            embedding_output = embedding_output.mean(dim=1)
+            mean_embedding_output = torch.zeros(bs, self.config.hidden_size).cuda()
+            for i in range(bs):
+                num = torch.sum(input_mask[i], dim=0)
+                # print("num: ", num)
+                mean_embedding_output[i] = torch.sum(embedding_output[i][:num], dim=0)/num
+            # embedding_output = embedding_output.mean(dim=1)
+            embedding_output = mean_embedding_output
+
         elif args.bert_embedding == "cls":
             # CLSをとる
             embedding_output = embedding_output[:, 0, :]
         assert embedding_output.shape == (bs, self.config.hidden_size) # (bs, 768)
 
         # attention
-        vc_features = self.relu(self.v2a_fc(visn_feats)) * self.relu(self.c2a_fc(embedding_output.unsqueeze(1))) # (bs, 36, 768)
-        tau = self.cv2a_fc(vc_features).squeeze() # (bs, 36)
-        assert tau.shape == (bs, visn_feats.shape[1])
-        alpha = F.softmax(tau, dim=1) # (bs, 36)
-        assert round(sum(alpha.sum(dim=1)).item()) == bs
-        attention_visn_feats = torch.mul(alpha.unsqueeze(2), visn_feats) # (bs, 36, 768) -> これでええのか？
-        attention_visn_feats = attention_visn_feats.sum(dim=1).squeeze() # (bs, 768)
-        assert attention_visn_feats.shape == (bs, self.config.hidden_size)
+        if args.visual_embedding == 'attention':
+            if args.relu =='relu':
+                vc_features = self.relu(self.v2a_fc(visn_feats)) * self.relu(self.c2a_fc(embedding_output.unsqueeze(1))) # (bs, 36, 768)
+            elif args.relu == 'none':
+                vc_features = self.v2a_fc(visn_feats) * self.c2a_fc(embedding_output.unsqueeze(1)) # (bs, 36, 768)
+            tau = self.cv2a_fc(vc_features).squeeze(2) # (bs, 36)
+            assert tau.shape == (bs, visn_feats.shape[1]) 
+            alpha = F.softmax(tau, dim=1) # (bs, 36)
+            assert round(sum(alpha.sum(dim=1)).item()) == bs
+            attention_visn_feats = torch.mul(alpha.unsqueeze(2), visn_feats) # (bs, 36, 768) 
+            visn_feats = attention_visn_feats.sum(dim=1).squeeze(1) # (bs, 768)
+            assert visn_feats.shape == (bs, self.config.hidden_size)
+        elif args.visual_embedding == 'mean':
+            visn_feats = visn_feats.mean(dim=1)
 
-        # concat
-        features = self.relu(self.v2h_fc(attention_visn_feats)) * self.relu(self.c2h_fc(embedding_output))
-        assert features.shape == (bs, self.config.hidden_size)
+        # hidden features
+        if args.hidden_features == 'li-c':
+            # concat
+            if args.concat == 'hadamard':
+                if args.relu == 'relu':
+                    features = self.relu(self.v2h_fc(visn_feats)) * self.relu(self.c2h_fc(embedding_output))
+                elif args.relu == 'none':
+                    features = self.v2h_fc(visn_feats) * self.c2h_fc(embedding_output)
+            elif args.concat == 'normal':
+                features = torch.cat([visn_feats, embedding_output], dim=1)
+            # assert features.shape == (bs, self.config.hidden_size) # (bs, 768)
+        elif args.hidden_features == 'l-c':
+            features = embedding_output
+        elif args.hidden_features == 'i-c':
+            features = visn_feats
+        assert features.shape == (bs, self.config.hidden_size) # (bs, 768)
+        
 
         return features
 
@@ -255,12 +285,19 @@ class Model(nn.Module):
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         vocab_size = len(self.tokenizer.vocab)
         self.encoder = Encoder(args, max_seq_length=30, tokenizer=self.tokenizer)
-        self.decoder = LSTMDecoder(embed_size=768, hidden_size=768, vocab_size=vocab_size)
+        if args.concat == 'hadamard':
+            self.decoder = LSTMDecoder(embed_size=768, hidden_size=768, vocab_size=vocab_size)
+        elif args.concat == 'normal':
+            self.decoder = LSTMDecoder(embed_size=1536, hidden_size=1536, vocab_size=vocab_size)
 
     def forward(self, feat, pos, composition, correction, lengths):
         features = self.encoder(composition, feat, pos)
         outputs = self.decoder(features, correction, lengths)
         return outputs
+
+    def sample(self, feat, pos, composition):
+        features = self.encoder(composition, feat, pos)
+        return self.decoder.samples(features)
 
 
     
