@@ -145,6 +145,8 @@ class Encoder(nn.Module):
         self.tokenizer = tokenizer
         self.config = BertConfig()
         self.embeddings = BertEmbeddings(config=self.config)
+        for param in self.embeddings.parameters():
+            param.requires_grad = False
         self.visn_fc = VisualFeatEncoder(config=self.config)
         self.v2a_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
         self.c2a_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
@@ -214,8 +216,6 @@ class Encoder(nn.Module):
             # assert features.shape == (bs, self.config.hidden_size) # (bs, 768)
         elif args.hidden_features == 'l-c':
             features = embedding_output
-        elif args.hidden_features == 'i-c':
-            features = visn_feats
         assert features.shape == (bs, self.config.hidden_size) # (bs, 768)
         
 
