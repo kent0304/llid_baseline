@@ -25,28 +25,17 @@ def collate_fn(data):
     # Sort a data list by caption length (descending order).
     data.sort(key=lambda x: len(x[-1]), reverse=True)
     id, filename, feats, boxes, composition, composition_ids, correction, correction_ids = zip(*data)
-    # id, feats, boxes, ans_text, crt, file_name, ans_text_copy, ans = zip(*data)
 
-    # Merge images (from tuple of 3D tensor to 4D tensor).
     feats = torch.stack(feats, 0)
     boxes = torch.stack(boxes, 0)
-
     lengths = [len(cap) for cap in correction_ids]
     targets = torch.zeros(len(correction_ids), 30).long()
-    # ans_lengths = [len(a) for a in composition_ids]
-    # ans_targets = torch.zeros(len(composition_ids), 30).long()
     for i, cap in enumerate(correction_ids):
         end = lengths[i]
         if end < 30:
             targets[i, :end] = cap[:end]    
         else:
             targets[i, :30] = cap[:30]   
-    # for i, a in enumerate(composition_ids):
-    #     end = ans_lengths[i]
-    #     if end < 30:
-    #         ans_targets[i, :end] = a[:end]    
-    #     else:
-    #         ans_targets[i, :30] = a[:30]
     return id, filename, feats, boxes, composition, composition_ids, correction, targets, lengths
 
 # drop_lastは最後のミニバッチが余った時にデータを捨てるかどうか
@@ -85,22 +74,8 @@ class Correct:
             )
         self.model = Model()
         
-        # # Model
-        # if args.attention:
-        #     print("CorrectModelAttentionロード")
-        #     self.model = CorrectModelAttention()
-        # elif args.copyattention:
-        #     print("CorrectModelAttentionCopyロード")
-        #     self.model = CorrectModelAttentionCopy()
-        # else:
-        #     self.model = CorrectModel()
-        
-
-        
         # GPU options
         self.model = self.model.cuda()
-        if args.multiGPU:
-            self.model.lxrt_encoder.multi_gpu()
 
         # Loss and Optimizer
         self.criterion = nn.CrossEntropyLoss(ignore_index=0)
@@ -119,7 +94,6 @@ class Correct:
             feats, boxes,  targets = feats.cuda(), boxes.cuda(),  targets.cuda() # crt (8,30)
             target = torch.zeros(targets.shape[0], 30).long().cuda()
             target[:,1:targets.shape[1]] = targets[:,1:] # targetもmax_lengthで覆う必要がある (batchsize, max_length)
-
             inputs = targets[:,:-1]
             with torch.no_grad():
                 # if args.attention or args.copyattention:
@@ -161,22 +135,16 @@ class Correct:
                     self.optim.zero_grad()
                     feats, boxes, targets = feats.cuda(), boxes.cuda(),  targets.cuda() # crt (8,30)
                     target = torch.zeros(targets.shape[0], 30).long().cuda()
-
                     target[:,1:targets.shape[1]] = targets[:,1:] # targetもmax_lengthで覆う必要がある (batchsize, max_length) (8,30)
-
                     inputs = targets[:,:-1]
                     
                     # if args.attention or args.copyattention:
                     #     outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths], ans_lengths, ans)
                     # else:
                     #     outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths], ans_lengths)   
-                    outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths]) 
-    
-                    # print(outputs.shape)
-                    
+                    outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths])                  
                     loss = self.criterion(outputs.view(-1, 30522), target.reshape(-1))
                     loss.backward()
-                    # print(loss.item())
                     self.optim.step()
                     train_loss += loss.item()
                 
@@ -191,7 +159,6 @@ class Correct:
                 if self.valid_tuple is not None:  # Do Validation
                     if args.data == 'raw':
                         self.save("epoch{}".format(epoch))
-                        
                     else:
                         if valid_loss < best_valid:
                             best_valid = valid_loss
@@ -213,32 +180,11 @@ class Correct:
                 sampled_ids = self.model.sample(feats, boxes, composition)
                 sampled_ids = torch.tensor(sampled_ids).cpu().numpy() # (1, max_seq_length) -> (max_seq_length)
             # Convert word_ids to words
-            sentence = self.model.tokenizer.decode(sampled_ids)
-            sentence = sentence.replace(".[SEP]", ". [SEP]") # [SEP]と.が連接しているものを離しておく
-            sentence = sentence.replace("[SEP].", "[SEP] .")
+            sentence = self.model.tokenizer.decode(sampled_ids, skip_special_tokens=True)
             sentence = sentence.replace(" - ", "-")
-            sentence_list = sentence.split(" ")
-            # sentence_list = tokenizer.tokenize(sentence)
-            if "[SEP]" in sentence_list:
-                sep_idx = sentence_list.index("[SEP]")
-                sentence_list = sentence_list[:sep_idx]
-                sentence = " ".join(sentence_list)
-                sentence = sentence.replace(" .", ".")
-                sentence = sentence.replace(" ,", ",")
-                print(sentence)
- 
-            crt = self.model.tokenizer.decode(targets.squeeze(0))
-            crt = crt.replace("[CLS]", "")
-            crt = crt.replace("[SEP]", "")
-            crt = crt.replace("[PAD]", "")
-            crt = crt.replace(" - ", "-")
-            crt = crt.strip()
             result[id[0]] = {"filename": filename[0], "学習者作文": composition[0], "専門家による添削": correction[0], "モデルによる添削予測": sentence}
         return result
     
-
-
-
     def save(self, name):
         torch.save(self.model.state_dict(), os.path.join(self.output, "%s.pth" % name))
 
@@ -265,28 +211,20 @@ class Correct:
 
 def main():
     correct = Correct()
-
-    # 学習済写真描写訂正モデルの読み込み
     if args.load is not None:
         correct.load(args.load)
-
 
     # Test or Train
     if args.test is not None:
         result = correct.predict(
             get_data_tuple("raw_test", bs=1, shuffle=False, drop_last=False)
         )
-        # print("========")
-        # print(result)
         with open(os.path.join(args.output, 'test_predict.json'), 'w') as f:
             json.dump(result, f, indent=4, ensure_ascii=False)
-
     else:
         print('Start training...')
         correct.train(correct.train_tuple, correct.valid_tuple)
 
     
-    
-
 if __name__ == "__main__":
     main()
