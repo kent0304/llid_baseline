@@ -145,8 +145,8 @@ class Encoder(nn.Module):
         self.tokenizer = tokenizer
         self.config = BertConfig()
         self.embeddings = BertEmbeddings(config=self.config)
-        for param in self.embeddings.parameters():
-            param.requires_grad = False
+        # for param in self.embeddings.parameters():
+        #     param.requires_grad = False
         self.visn_fc = VisualFeatEncoder(config=self.config)
         self.v2a_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
         self.c2a_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
