@@ -180,8 +180,18 @@ class Correct:
                 sampled_ids = self.model.sample(feats, boxes, composition)
                 sampled_ids = torch.tensor(sampled_ids).cpu().numpy() # (1, max_seq_length) -> (max_seq_length)
             # Convert word_ids to words
-            sentence = self.model.tokenizer.decode(sampled_ids, skip_special_tokens=True)
+            sentence = self.model.tokenizer.decode(sampled_ids)
+            sentence_list = sentence.split(' ')
+            if "[SEP]" in sentence_list:
+                sep_idx = sentence_list.index("[SEP]")
+                sentence_list = sentence_list[:sep_idx]
+                sentence = " ".join(sentence_list)
+
+            sentence = sentence.replace("[SEP].", "")
+            sentence = sentence.replace("[SEP],", "")
+            sentence = sentence.replace("[SEP]s", "")
             sentence = sentence.replace(" - ", "-")
+            print(sentence)
             result[id[0]] = {"filename": filename[0], "学習者作文": composition[0], "専門家による添削": correction[0], "モデルによる添削予測": sentence}
         return result
     
