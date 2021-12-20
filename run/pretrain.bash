@@ -15,11 +15,12 @@ CUDA_VISIBLE_DEVICES=$1 PYTHONPATH=$PYTHONPATH:./ \
     --visual_embedding attention \
     --bert_embedding mean \
     --hidden_features li-c \
+    --img_feat global \
     --concat hadamard \
     --relu relu \
     --batchSize 64 \
     --lr 5e-5 \
-    --epochs 30 \
+    --epochs 50 \
     --tqdm \
     --output $output ${@:3}
 
