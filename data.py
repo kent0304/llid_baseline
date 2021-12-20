@@ -59,22 +59,34 @@ class PDCTorchDataset(Dataset):
         img_data = []
         # pickleを読み込む
         print("画像featuresのpickleをロード中")
-        if 'raw' in self.raw_dataset.name: 
-            with open(MSCOCO_IMGFEAT_ROOT + 'raw_features.pkl', "rb") as f:
-                result = pickle.load(f)
-        elif 'synthetic_train' in self.raw_dataset.name:
-            with open(MSCOCO_IMGFEAT_ROOT + 'train_synthetic_features_mscoco_half_crt.pkl', "rb") as f:
-                result = pickle.load(f)
-        elif 'synthetic_val' in self.raw_dataset.name:
-            with open(MSCOCO_IMGFEAT_ROOT + 'valid_synthetic_features_mscoco_half_crt.pkl', "rb") as f:
-                result = pickle.load(f)
+        if args.img_feat == 'bottomup':
+            if 'raw' in self.raw_dataset.name: 
+                with open(MSCOCO_IMGFEAT_ROOT + 'raw_features.pkl', "rb") as f:
+                    result = pickle.load(f)
+            elif 'synthetic_train' in self.raw_dataset.name:
+                with open(MSCOCO_IMGFEAT_ROOT + 'train_synthetic_features_mscoco_half_crt.pkl', "rb") as f:
+                    result = pickle.load(f)
+            elif 'synthetic_val' in self.raw_dataset.name:
+                with open(MSCOCO_IMGFEAT_ROOT + 'valid_synthetic_features_mscoco_half_crt.pkl', "rb") as f:
+                    result = pickle.load(f)
+        elif args.img_feat == 'global':
+            if 'raw' in self.raw_dataset.name: 
+                with open(MSCOCO_IMGFEAT_ROOT + 'global_raw_features.pkl', "rb") as f:
+                    result = pickle.load(f)
+            elif 'synthetic_train' in self.raw_dataset.name:
+                with open(MSCOCO_IMGFEAT_ROOT + 'global_train_synthetic_features_mscoco_half_crt.pkl', "rb") as f:
+                    result = pickle.load(f)
+            elif 'synthetic_val' in self.raw_dataset.name:
+                with open(MSCOCO_IMGFEAT_ROOT + 'global_valid_synthetic_features_mscoco_half_crt.pkl', "rb") as f:
+                    result = pickle.load(f)
 
         # Convert img list to dict
         self.imgid2img = {}
         # imagid2imgは、画像IDをキーとして、画像データを値として保持します。
         for img_datum in result:
             img_id = img_datum['img_id']
-            img_id = str(int(img_id.split('_')[-1]))
+            if args.img_feat == 'bottomup':
+                img_id = str(int(img_id.split('_')[-1]))
             self.imgid2img[img_id] = img_datum
 
         # Only kept the data with loaded image features
@@ -124,13 +136,18 @@ class PDCTorchDataset(Dataset):
             filename = ''
         # Get image info
         img_info = self.imgid2img[img_id]
-        obj_num = img_info['num_boxes']
-        feats = img_info['features'].copy()
-        feats = np.squeeze(feats)
-        boxes = img_info['boxes'].copy()
-        boxes = np.squeeze(boxes)
-        assert obj_num == len(boxes) == len(feats)
-        feats = torch.tensor(feats, dtype=torch.float32)
+        if args.img_feat == 'bottomup':
+            obj_num = img_info['num_boxes']
+            feats = img_info['features'].copy()
+            feats = np.squeeze(feats)
+            boxes = img_info['boxes'].copy()
+            boxes = np.squeeze(boxes)
+            assert obj_num == len(boxes) == len(feats)
+            feats = torch.tensor(feats, dtype=torch.float32)
+            boxes = torch.tensor(boxes, dtype=torch.float32)
+        elif args.img_feat == 'global':
+            global_feat = img_info["global_feat"]
+            global_feat = torch.tensor(global_feat, dtype=torch.float32)
 
         # Convert caption (string) to word ids.
         # ans_tokens = nltk.tokenize.word_tokenize(str(ans_text).lower())
@@ -147,12 +164,11 @@ class PDCTorchDataset(Dataset):
         composition_tokens = ['[CLS]'] + self.tokenizer.tokenize(composition) +['[SEP]']
         composition_ids = self.tokenizer.convert_tokens_to_ids(composition_tokens)
         composition_ids = torch.Tensor(composition_ids).long()
-           
-        feats = torch.tensor(feats, dtype=torch.float32)
-        boxes = torch.tensor(boxes, dtype=torch.float32)
 
-        return id, filename, feats, boxes, composition, composition_ids, correction, correction_ids
-
+        if args.img_feat == 'bottomup':
+            return id, filename, feats, boxes, composition, composition_ids, correction, correction_ids
+        elif args.img_feat == 'global':
+            return id, filename, global_feat, composition, composition_ids, correction, correction_ids
 
 # dataset = PDCDataset('synthetic_train') # 201059
 # torch_ds = PDCTorchDataset(dataset)
