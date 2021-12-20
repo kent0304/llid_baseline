@@ -54,6 +54,9 @@ def parse_args():
     parser.add_argument('--visual_embedding', type=str, default='attention') # attention or mean
     parser.add_argument('--hidden_features', type=str, default='li-c') # li-c or l-c
 
+    # image features
+    parser.add_argument('--img_feat', type=str, default='bottomup') # bottomup or global
+
     # concat 
     parser.add_argument('--concat', type=str, default='hadamard') # hadamard or normal
     parser.add_argument('--relu', type=str, default='relu') # relu or none
