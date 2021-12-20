@@ -13,7 +13,7 @@ from param import args
 from matplotlib import pyplot as plt
 plt.switch_backend('agg')
 
-from model import Model
+from model import Model, GlobalModel
 from data import PDCDataset, PDCTorchDataset
 
 DataTuple = collections.namedtuple("DataTuple", 'dataset loader')
@@ -24,10 +24,13 @@ DataTuple = collections.namedtuple("DataTuple", 'dataset loader')
 def collate_fn(data):
     # Sort a data list by caption length (descending order).
     data.sort(key=lambda x: len(x[-1]), reverse=True)
-    id, filename, feats, boxes, composition, composition_ids, correction, correction_ids = zip(*data)
-
-    feats = torch.stack(feats, 0)
-    boxes = torch.stack(boxes, 0)
+    if args.img_feat == 'bottomup':
+        id, filename, feats, boxes, composition, composition_ids, correction, correction_ids = zip(*data)
+        feats = torch.stack(feats, 0)
+        boxes = torch.stack(boxes, 0)
+    elif args.img_feat == 'global':
+        id, filename, global_feat, composition, composition_ids, correction, correction_ids = zip(*data)
+        global_feat = torch.stack(global_feat, 0)
     lengths = [len(cap) for cap in correction_ids]
     targets = torch.zeros(len(correction_ids), 30).long()
     for i, cap in enumerate(correction_ids):
@@ -35,8 +38,12 @@ def collate_fn(data):
         if end < 30:
             targets[i, :end] = cap[:end]    
         else:
-            targets[i, :30] = cap[:30]   
-    return id, filename, feats, boxes, composition, composition_ids, correction, targets, lengths
+            targets[i, :30] = cap[:30] 
+    if args.img_feat == 'bottomup':
+        return id, filename, (feats, boxes), composition, composition_ids, correction, targets, lengths
+    elif args.img_feat == 'global':
+        return id, filename, global_feat, composition, composition_ids, correction, targets, lengths
+
 
 # drop_lastは最後のミニバッチが余った時にデータを捨てるかどうか
 # pin_memoryはGPUメモリにデータを送るかどうか
@@ -72,7 +79,10 @@ class Correct:
             self.valid_tuple = get_data_tuple(
                 "synthetic_val", bs=args.batch_size, shuffle=False, drop_last=False
             )
-        self.model = Model()
+        if args.img_feat == 'bottomup':
+            self.model = Model()
+        elif args.img_feat == 'global':
+            self.model = GlobalModel()
         
         # GPU options
         self.model = self.model.cuda()
@@ -90,8 +100,13 @@ class Correct:
         self.model.eval()
         valid_loss = 0
         iter_wrapper = (lambda x: tqdm(x, total=len(loader))) if args.tqdm else (lambda x: x)
-        for i, (id, filename, feats, boxes, composition, composition_ids, correction, targets, lengths) in iter_wrapper(enumerate(loader)):
-            feats, boxes,  targets = feats.cuda(), boxes.cuda(),  targets.cuda() # crt (8,30)
+        for i, (id, filename, features, composition, composition_ids, correction, targets, lengths) in iter_wrapper(enumerate(loader)):
+            if args.img_feat == 'bottomup':
+                feats, boxes = features
+                feats, boxes, targets = feats.cuda(), boxes.cuda(),  targets.cuda() # crt (8,30)
+            elif args.img_feat == 'global':
+                global_features = features
+                global_features, targets = global_features.cuda(), targets.cuda()
             target = torch.zeros(targets.shape[0], 30).long().cuda()
             target[:,1:targets.shape[1]] = targets[:,1:] # targetもmax_lengthで覆う必要がある (batchsize, max_length)
             inputs = targets[:,:-1]
@@ -99,7 +114,11 @@ class Correct:
                 # if args.attention or args.copyattention:
                 #     outputs = self.model(feats, boxes, ans_text, inputs, [l-1 for l in lengths], ans_lengths, ans)
                 # else:
-                outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths]) 
+                if args.img_feat == 'bottomup':
+                    outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths]) 
+                elif args.img_feat == 'global':
+                    outputs = self.model(global_features, composition, inputs, [l-1 for l in lengths])               
+                
                 # m2 score 
                 if args.data == 'raw':
                     sampled_ids = outputs.max(2)[1] # maxの出力はidx0: 値, idx1: 位置
@@ -131,9 +150,16 @@ class Correct:
             for epoch in range(args.epochs):
                 train_loss = 0
                 self.model.train()
-                for i, (id, filename, feats, boxes, composition, composition_ids, correction, targets, lengths) in iter_wrapper(enumerate(loader)):
+                for i, (id, filename, features, composition, composition_ids, correction, targets, lengths) in iter_wrapper(enumerate(loader)):
                     self.optim.zero_grad()
-                    feats, boxes, targets = feats.cuda(), boxes.cuda(),  targets.cuda() # crt (8,30)
+        
+                    if args.img_feat == 'bottomup':
+                        feats, boxes = features
+                        feats, boxes, targets = feats.cuda(), boxes.cuda(),  targets.cuda() # crt (8,30)
+                    elif args.img_feat == 'global':
+                        global_features = features
+                        global_features, targets = global_features.cuda(), targets.cuda()
+                
                     target = torch.zeros(targets.shape[0], 30).long().cuda()
                     target[:,1:targets.shape[1]] = targets[:,1:] # targetもmax_lengthで覆う必要がある (batchsize, max_length) (8,30)
                     inputs = targets[:,:-1]
@@ -142,7 +168,10 @@ class Correct:
                     #     outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths], ans_lengths, ans)
                     # else:
                     #     outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths], ans_lengths)   
-                    outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths])                  
+                    if args.img_feat == 'bottomup':
+                        outputs = self.model(feats, boxes, composition, inputs, [l-1 for l in lengths])   
+                    elif args.img_feat == 'global':
+                        outputs = self.model(global_features, composition, inputs, [l-1 for l in lengths])               
                     loss = self.criterion(outputs.view(-1, 30522), target.reshape(-1))
                     loss.backward()
                     self.optim.step()
@@ -170,14 +199,22 @@ class Correct:
         dset, loader = eval_tuple
         result = {}
         # tokenizer.decoder = decoders.WordPiece()
-        for i, (id, filename, feats, boxes, composition, composition_ids, correction, targets, lengths) in enumerate(loader): # Avoid seeing ground truth
+        for i, (id, filename, features, composition, composition_ids, correction, targets, lengths) in enumerate(loader): # Avoid seeing ground truth
             with torch.no_grad():
-                feats, boxes = feats.cuda(), boxes.cuda()
+                if args.img_feat == 'bottomup':
+                    feats, boxes = features
+                    feats, boxes, targets = feats.cuda(), boxes.cuda(),  targets.cuda() # crt (8,30)
+                elif args.img_feat == 'global':
+                    global_features = features
+                    global_features, targets = global_features.cuda(), targets.cuda()
                 # if args.attention or args.copyattention:
                 #     sampled_ids = self.model.sample(feats, boxes, ans_text, ans_lengths, ans)
                 # else:
                 #     sampled_ids = self.model.sample(feats, boxes, ans_text)
-                sampled_ids = self.model.sample(feats, boxes, composition)
+                if args.img_feat == 'bottomup':
+                    sampled_ids = self.model.sample(feats, boxes, composition)
+                elif args.img_feat == 'global':
+                    sampled_ids = self.model.sample(global_features, composition)
                 sampled_ids = torch.tensor(sampled_ids).cpu().numpy() # (1, max_seq_length) -> (max_seq_length)
             # Convert word_ids to words
             sentence = self.model.tokenizer.decode(sampled_ids)
