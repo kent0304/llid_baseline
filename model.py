@@ -147,8 +147,10 @@ class Encoder(nn.Module):
         self.embeddings = BertEmbeddings(config=self.config)
         # for param in self.embeddings.parameters():
         #     param.requires_grad = False
-        self.visn_fc = VisualFeatEncoder(config=self.config)
-        self.global_visn_fc = nn.Linear(2048, self.config.hidden_size)
+        if args.img_feat == 'bottomup':
+            self.visn_fc = VisualFeatEncoder(config=self.config)
+        elif args.img_feat == 'global':
+            self.global_visn_fc = nn.Linear(2048, self.config.hidden_size)
         self.v2a_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
         self.c2a_fc = nn.Linear(self.config.hidden_size, self.config.hidden_size)
         self.cv2a_fc = nn.Linear(self.config.hidden_size, 1)
@@ -158,7 +160,15 @@ class Encoder(nn.Module):
 
 
     def forward(self, compositions, feature, visual_attention_mask=None):
-        bs = feature.size(0)
+        if args.img_feat == 'bottomup':
+            feat, pos = feature
+            visn_feats = self.visn_fc(feat, pos)
+            bs = feat.size(0)
+            assert visn_feats.shape == (bs, 36, self.config.hidden_size) # (bs, 36, 768)
+        elif args.img_feat == 'global':
+            visn_feats = self.global_visn_fc(feature)
+            bs = feature.size(0)
+        
         train_features = convert_sents_to_features(compositions, self.max_seq_length, self.tokenizer)
 
         input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long).cuda()
@@ -166,12 +176,7 @@ class Encoder(nn.Module):
         segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long).cuda()
 
         embedding_output = self.embeddings(input_ids, token_type_ids=segment_ids)
-        if args.img_feat == 'bottomup':
-            feat, pos = feature
-            visn_feats = self.visn_fc(feat, pos)
-            assert visn_feats.shape == (bs, 36, self.config.hidden_size) # (bs, 36, 768)
-        elif args.img_feat == 'global':
-            visn_feats = self.global_visn_fc(feature)
+        
 
         assert embedding_output.shape == (bs, self.max_seq_length, self.config.hidden_size) # (bs, 30, 768)
         # print("input_ids: ", input_ids)
@@ -230,6 +235,66 @@ class Encoder(nn.Module):
         
 
         return features
+
+    def get_attention(self, compositions, feature, visual_attention_mask=None):
+        if args.img_feat == 'bottomup':
+            feat, pos = feature
+            visn_feats = self.visn_fc(feat, pos)
+            bs = feat.size(0)
+            assert visn_feats.shape == (bs, 36, self.config.hidden_size) # (bs, 36, 768)
+        elif args.img_feat == 'global':
+            visn_feats = self.global_visn_fc(feature)
+            bs = feature.size(0)
+        
+        train_features = convert_sents_to_features(compositions, self.max_seq_length, self.tokenizer)
+
+        input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long).cuda()
+        input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long).cuda()
+        segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long).cuda()
+
+        embedding_output = self.embeddings(input_ids, token_type_ids=segment_ids)
+        
+
+        assert embedding_output.shape == (bs, self.max_seq_length, self.config.hidden_size) # (bs, 30, 768)
+        # print("input_ids: ", input_ids)
+        # print("input_mask: ", input_mask)
+        # print("segment_ids: ", segment_ids)
+     
+        if args.bert_embedding == "mean":
+            # 平均をとる
+            mean_embedding_output = torch.zeros(bs, self.config.hidden_size).cuda()
+            for i in range(bs):
+                num = torch.sum(input_mask[i], dim=0)
+                # print("num: ", num)
+                mean_embedding_output[i] = torch.sum(embedding_output[i][:num], dim=0)/num
+            # embedding_output = embedding_output.mean(dim=1)
+            embedding_output = mean_embedding_output
+
+        elif args.bert_embedding == "cls":
+            # CLSをとる
+            embedding_output = embedding_output[:, 0, :]
+        assert embedding_output.shape == (bs, self.config.hidden_size) # (bs, 768)
+
+        if args.img_feat == 'bottomup':
+            # attention
+            if args.visual_embedding == 'attention':
+                if args.relu =='relu':
+                    vc_features = self.relu(self.v2a_fc(visn_feats)) * self.relu(self.c2a_fc(embedding_output.unsqueeze(1))) # (bs, 36, 768)
+                elif args.relu == 'none':
+                    vc_features = self.v2a_fc(visn_feats) * self.c2a_fc(embedding_output.unsqueeze(1)) # (bs, 36, 768)
+                tau = self.cv2a_fc(vc_features).squeeze(2) # (bs, 36)
+                assert tau.shape == (bs, visn_feats.shape[1]) 
+                alpha = F.softmax(tau, dim=1) # (bs, 36)
+            #     assert round(sum(alpha.sum(dim=1)).item()) == bs
+            #     print("alpha: ", alpha)
+            #     attention_visn_feats = torch.mul(alpha.unsqueeze(2), visn_feats) # (bs, 36, 768) 
+            #     visn_feats = attention_visn_feats.sum(dim=1).squeeze(1) # (bs, 768)
+            #     assert visn_feats.shape == (bs, self.config.hidden_size)
+            # elif args.visual_embedding == 'mean':
+            #     visn_feats = visn_feats.mean(dim=1)
+        return alpha
+    
+
 
 
 class LSTMDecoder(nn.Module):

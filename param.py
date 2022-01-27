@@ -61,6 +61,9 @@ def parse_args():
     parser.add_argument('--concat', type=str, default='hadamard') # hadamard or normal
     parser.add_argument('--relu', type=str, default='relu') # relu or none
 
+    # Attention Visualization
+    parser.add_argument('--visualization', default=None) # none or softmax
+
     # Debugging
     parser.add_argument('--output', type=str, default='snap/test')
     parser.add_argument("--fast", action='store_const', default=False, const=True)

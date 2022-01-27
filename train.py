@@ -23,9 +23,13 @@ DataTuple = collections.namedtuple("DataTuple", 'dataset loader')
 # データをバッチサイズでまとめる際に使う関数
 def collate_fn(data):
     # Sort a data list by caption length (descending order).
-    data.sort(key=lambda x: len(x[-1]), reverse=True)
+    data.sort(key=lambda x: len(x[7]), reverse=True)
     if args.img_feat == 'bottomup':
-        id, filename, feats, boxes, composition, composition_ids, correction, correction_ids = zip(*data)
+        if args.visualization is not None:
+            id, filename, feats, boxes, composition, composition_ids, correction, correction_ids, orig_boxes = zip(*data)
+            orig_boxes = torch.stack(orig_boxes, 0)
+        else:
+            id, filename, feats, boxes, composition, composition_ids, correction, correction_ids = zip(*data)
         feats = torch.stack(feats, 0)
         boxes = torch.stack(boxes, 0)
     elif args.img_feat == 'global':
@@ -40,6 +44,8 @@ def collate_fn(data):
         else:
             targets[i, :30] = cap[:30] 
     if args.img_feat == 'bottomup':
+        if args.visualization is not None:
+            return id, filename, (feats, boxes), composition, composition_ids, correction, targets, lengths, orig_boxes
         return id, filename, (feats, boxes), composition, composition_ids, correction, targets, lengths
     elif args.img_feat == 'global':
         return id, filename, global_feat, composition, composition_ids, correction, targets, lengths
@@ -192,6 +198,7 @@ class Correct:
                         if valid_loss < best_valid:
                             best_valid = valid_loss
                             self.save("BEST")
+
 
 
     def predict(self, eval_tuple: DataTuple):

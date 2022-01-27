@@ -17,7 +17,7 @@ SPLIT2NAME = {
     'synthetic_val': 'synthetic/val17_data',
     'raw_train': 'raw/trainexp_pdc_dataset_1109',
     'raw_val': 'raw/validexp_pdc_dataset_1109',
-    'raw_test': 'raw/testexp_pdc_dataset_1109',
+    'raw_test': 'raw/testexp_pdc_dataset_1109_0127',
 }
 
 
@@ -61,8 +61,15 @@ class PDCTorchDataset(Dataset):
         print("画像featuresのpickleをロード中")
         if args.img_feat == 'bottomup':
             if 'raw' in self.raw_dataset.name: 
-                with open(MSCOCO_IMGFEAT_ROOT + 'raw_features.pkl', "rb") as f:
-                    result = pickle.load(f)
+                with open(MSCOCO_IMGFEAT_ROOT + 'raw_features_bbox.pkl', "rb") as f:
+                        result = pickle.load(f)
+                # if args.visualization is not None:
+                #     with open(MSCOCO_IMGFEAT_ROOT + 'raw_features_bbox.pkl', "rb") as f:
+                #         result = pickle.load(f)
+                # else:
+                #     with open(MSCOCO_IMGFEAT_ROOT + 'raw_features.pkl', "rb") as f:
+                #         result = pickle.load(f)
+                
             elif 'synthetic_train' in self.raw_dataset.name:
                 with open(MSCOCO_IMGFEAT_ROOT + 'train_synthetic_features_mscoco_half_crt.pkl', "rb") as f:
                     result = pickle.load(f)
@@ -145,6 +152,10 @@ class PDCTorchDataset(Dataset):
             assert obj_num == len(boxes) == len(feats)
             feats = torch.tensor(feats, dtype=torch.float32)
             boxes = torch.tensor(boxes, dtype=torch.float32)
+            if args.visualization is not None:
+                orig_boxes = img_info["original_boxes"].copy()
+                orig_boxes = np.squeeze(orig_boxes)
+                orig_boxes = torch.tensor(orig_boxes, dtype=torch.float32)
         elif args.img_feat == 'global':
             global_feat = img_info["global_feat"]
             global_feat = torch.tensor(global_feat, dtype=torch.float32)
@@ -166,9 +177,12 @@ class PDCTorchDataset(Dataset):
         composition_ids = torch.Tensor(composition_ids).long()
 
         if args.img_feat == 'bottomup':
+            if args.visualization is not None:
+                return id, filename, feats, boxes, composition, composition_ids, correction, correction_ids, orig_boxes
             return id, filename, feats, boxes, composition, composition_ids, correction, correction_ids
         elif args.img_feat == 'global':
             return id, filename, global_feat, composition, composition_ids, correction, correction_ids
+
 
 # dataset = PDCDataset('synthetic_train') # 201059
 # torch_ds = PDCTorchDataset(dataset)
