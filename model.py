@@ -71,8 +71,7 @@ class InputFeatures(object):
 
 
 def convert_sents_to_features(sents, max_seq_length, tokenizer):
-    """Loads a data file into a list of `InputBatch`s."""
-    # 文章を受け取り、tokenizeしてidsにする
+    """Loads a sentence and tokenize it into ids"""
 
     features = []
     for (i, sent) in enumerate(sents):
@@ -176,30 +175,20 @@ class Encoder(nn.Module):
         segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long).cuda()
 
         embedding_output = self.embeddings(input_ids, token_type_ids=segment_ids)
-        
-
         assert embedding_output.shape == (bs, self.max_seq_length, self.config.hidden_size) # (bs, 30, 768)
-        # print("input_ids: ", input_ids)
-        # print("input_mask: ", input_mask)
-        # print("segment_ids: ", segment_ids)
-     
+
         if args.bert_embedding == "mean":
-            # 平均をとる
             mean_embedding_output = torch.zeros(bs, self.config.hidden_size).cuda()
             for i in range(bs):
                 num = torch.sum(input_mask[i], dim=0)
-                # print("num: ", num)
                 mean_embedding_output[i] = torch.sum(embedding_output[i][:num], dim=0)/num
-            # embedding_output = embedding_output.mean(dim=1)
             embedding_output = mean_embedding_output
 
         elif args.bert_embedding == "cls":
-            # CLSをとる
             embedding_output = embedding_output[:, 0, :]
         assert embedding_output.shape == (bs, self.config.hidden_size) # (bs, 768)
 
         if args.img_feat == 'bottomup':
-            # attention
             if args.visual_embedding == 'attention':
                 if args.relu =='relu':
                     vc_features = self.relu(self.v2a_fc(visn_feats)) * self.relu(self.c2a_fc(embedding_output.unsqueeze(1))) # (bs, 36, 768)
@@ -215,10 +204,6 @@ class Encoder(nn.Module):
             elif args.visual_embedding == 'mean':
                 visn_feats = visn_feats.mean(dim=1)
 
-
-        
-
-        # hidden features
         if args.hidden_features == 'li-c':
             # concat
             if args.concat == 'hadamard':
@@ -233,7 +218,6 @@ class Encoder(nn.Module):
             features = embedding_output
         assert features.shape == (bs, self.config.hidden_size) # (bs, 768)
         
-
         return features
 
     def get_attention(self, compositions, feature, visual_attention_mask=None):
@@ -253,30 +237,20 @@ class Encoder(nn.Module):
         segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long).cuda()
 
         embedding_output = self.embeddings(input_ids, token_type_ids=segment_ids)
-        
-
         assert embedding_output.shape == (bs, self.max_seq_length, self.config.hidden_size) # (bs, 30, 768)
-        # print("input_ids: ", input_ids)
-        # print("input_mask: ", input_mask)
-        # print("segment_ids: ", segment_ids)
-     
+
         if args.bert_embedding == "mean":
-            # 平均をとる
             mean_embedding_output = torch.zeros(bs, self.config.hidden_size).cuda()
             for i in range(bs):
                 num = torch.sum(input_mask[i], dim=0)
-                # print("num: ", num)
                 mean_embedding_output[i] = torch.sum(embedding_output[i][:num], dim=0)/num
-            # embedding_output = embedding_output.mean(dim=1)
             embedding_output = mean_embedding_output
 
         elif args.bert_embedding == "cls":
-            # CLSをとる
             embedding_output = embedding_output[:, 0, :]
         assert embedding_output.shape == (bs, self.config.hidden_size) # (bs, 768)
 
         if args.img_feat == 'bottomup':
-            # attention
             if args.visual_embedding == 'attention':
                 if args.relu =='relu':
                     vc_features = self.relu(self.v2a_fc(visn_feats)) * self.relu(self.c2a_fc(embedding_output.unsqueeze(1))) # (bs, 36, 768)
@@ -285,13 +259,6 @@ class Encoder(nn.Module):
                 tau = self.cv2a_fc(vc_features).squeeze(2) # (bs, 36)
                 assert tau.shape == (bs, visn_feats.shape[1]) 
                 alpha = F.softmax(tau, dim=1) # (bs, 36)
-            #     assert round(sum(alpha.sum(dim=1)).item()) == bs
-            #     print("alpha: ", alpha)
-            #     attention_visn_feats = torch.mul(alpha.unsqueeze(2), visn_feats) # (bs, 36, 768) 
-            #     visn_feats = attention_visn_feats.sum(dim=1).squeeze(1) # (bs, 768)
-            #     assert visn_feats.shape == (bs, self.config.hidden_size)
-            # elif args.visual_embedding == 'mean':
-            #     visn_feats = visn_feats.mean(dim=1)
         return alpha
     
 
@@ -322,12 +289,7 @@ class LSTMDecoder(nn.Module):
         bs = embeddings.shape[0]
         packed = pack_padded_sequence(embeddings, lengths, batch_first=True)
         hiddens, _ = self.lstm(packed, (features.view(self.num_layers, bs, self.hidden_size), features.view(self.num_layers, bs, self.hidden_size)))
-        # print("lstmに突っ込んだ後のhiddenがこれ")
-        # print(hiddens)
-        # print(hiddens[0].size())
         hiddens = pad_packed_sequence(hiddens, batch_first=True)
-        # print(hiddens[0].size())
-        # print(hiddens[0].size())
         outputs = self.linear(hiddens[0]) # 29まであるとは限らない
         total_outputs = torch.zeros(bs, self.max_seq_length, self.vocab_size).cuda()
         total_outputs[:,1:outputs.shape[1]+1,:] = outputs
@@ -343,15 +305,10 @@ class LSTMDecoder(nn.Module):
         for i in range(self.max_seg_length):
             hiddens, states = self.lstm(inputs, states)          # hiddens: (batch_size, 1, hidden_size)
             outputs = self.linear(hiddens.squeeze(1))            # outputs:  (batch_size, vocab_size)
-            # print("outputs",outputs)
             _, predicted = outputs.max(1)                        # predicted: (batch_size)
-            # print("predicted",predicted)
             sampled_ids.append(predicted)
-            # print(predicted)
             inputs = self.embed(predicted)                       # inputs: (batch_size, embed_size)
             inputs = inputs.unsqueeze(1)                         # inputs: (batch_size, 1, embed_size)
-        # sampled_ids = torch.stack(sampled_ids, 1)                # sampled_ids: (batch_size, max_seq_length)
-        # print("sampled_ids",sampled_ids)
         return sampled_ids
 
 class Model(nn.Module):
