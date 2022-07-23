@@ -1,6 +1,4 @@
 # coding=utf-8
-# Copyleft 2019 project LXRT.
-
 import argparse
 import random
 
@@ -63,6 +61,9 @@ def parse_args():
 
     # Attention Visualization
     parser.add_argument('--visualization', default=None) # none or softmax
+
+    # best correction
+    parser.add_argument("--best_crt", action='store_const', default=False, const=True)
 
     # Debugging
     parser.add_argument('--output', type=str, default='snap/test')
