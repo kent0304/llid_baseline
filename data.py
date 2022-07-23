@@ -1,7 +1,6 @@
 import json
 import os
 import pickle
-# import nltk
 
 import numpy as np
 import torch
@@ -10,34 +9,34 @@ from transformers import BertTokenizer
 
 from param import args
 
-LAB_DATA_PATH = "/mnt/LSTA6/data/tanaka/pdc/baseline/data/"
-MSCOCO_IMGFEAT_ROOT = "/mnt/LSTA6/data/tanaka/pdc/baseline/data/mscoco_imgfeats/"
+DATA_PATH = "./data/"
+MSCOCO_IMGFEAT_ROOT = "./data/mscoco_imgfeats/"
 SPLIT2NAME = {
     'synthetic_train': 'synthetic/train17_data',
     'synthetic_val': 'synthetic/val17_data',
-    'raw_train': 'raw/trainexp_pdc_dataset_1109',
-    'raw_val': 'raw/validexp_pdc_dataset_1109',
-    'raw_test': 'raw/testexp_pdc_dataset_1109_0127',
+    'raw_train': 'raw/train',
+    'raw_val': 'raw/valid',
+    'raw_test': 'raw/test',
+    'konan_train': 'konan/konan_train',
+    'konan_val': 'konan/konan_val',
+    'konan_test': 'konan/konan_test',
 }
 
-
-
-class PDCDataset:
+class MyDataset:
     """
+    example:
     "36": {
         "img_id": "482917",
         "correction": "A dog sitting between its masters feet on a footstool watching tv",
         "composition": "A dog sit between its masters feet about a footstool watching tv"
     },
-
     """
     def __init__(self, split: str):
         self.name = split
-        # Loading datasets
         self.data = []
-        self.data.extend(json.load(open(LAB_DATA_PATH + "%s.json" % SPLIT2NAME[split])).items())
+        self.data.extend(json.load(open(DATA_PATH + "%s.json" % SPLIT2NAME[split])).items())
         print("Load %d data from split(s) %s." % (len(self.data), self.name))
-        # print(self.data)
+
         # Convert list to dict (for evaluation)
         self.id2datum = {
             k: v
@@ -48,8 +47,8 @@ class PDCDataset:
         return len(self.data)
 
 
-class PDCTorchDataset(Dataset):
-    def __init__(self, dataset: PDCDataset):
+class MyTorchDataset(Dataset):
+    def __init__(self, dataset: MyDataset):
         super().__init__()
         self.raw_dataset = dataset
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -57,19 +56,15 @@ class PDCTorchDataset(Dataset):
 
         # Loading detection features to img_data
         img_data = []
-        # pickleを読み込む
-        print("画像featuresのpickleをロード中")
+        # loading pickle
+        print("Loading image features...")
         if args.img_feat == 'bottomup':
             if 'raw' in self.raw_dataset.name: 
                 with open(MSCOCO_IMGFEAT_ROOT + 'raw_features_bbox.pkl', "rb") as f:
                         result = pickle.load(f)
-                # if args.visualization is not None:
-                #     with open(MSCOCO_IMGFEAT_ROOT + 'raw_features_bbox.pkl', "rb") as f:
-                #         result = pickle.load(f)
-                # else:
-                #     with open(MSCOCO_IMGFEAT_ROOT + 'raw_features.pkl', "rb") as f:
-                #         result = pickle.load(f)
-                
+            elif 'konan' in self.raw_dataset.name:
+                with open(MSCOCO_IMGFEAT_ROOT + 'konan_features_bbox.pkl', "rb") as f:
+                    result = pickle.load(f)
             elif 'synthetic_train' in self.raw_dataset.name:
                 with open(MSCOCO_IMGFEAT_ROOT + 'train_synthetic_features_mscoco_half_crt.pkl', "rb") as f:
                     result = pickle.load(f)
@@ -88,8 +83,7 @@ class PDCTorchDataset(Dataset):
                     result = pickle.load(f)
 
         # Convert img list to dict
-        self.imgid2img = {}
-        # imagid2imgは、画像IDをキーとして、画像データを値として保持します。
+        self.imgid2img = {} # imagid => img_feature
         for img_datum in result:
             img_id = img_datum['img_id']
             if args.img_feat == 'bottomup':
@@ -106,9 +100,9 @@ class PDCTorchDataset(Dataset):
                 self.data.append(datum)
             else:
                 pass
-                # print("%s は ありませんでした" % (datum[1]['img_id']))
+    
         print("Use %d data in torch dataset" % (len(self.data)))
-        # torch datasetは実際に学習に使うデータセット
+        # "torch dataset" is for training
         print()
 
     def __len__(self):
@@ -130,10 +124,13 @@ class PDCTorchDataset(Dataset):
         datum = self.data[item][1]
         img_id = datum['img_id']
         img_id = str(int(img_id.split('_')[-1]))
+
         if 'raw' in self.raw_dataset.name: 
             composition = datum['ans'].lower()
             correction = datum['crt'].lower()
-            gector = datum["gector"].lower()
+            if args.best_crt:
+                correction = datum['best_crt'].lower()
+            # gector = datum["gector"].lower()
             filename = datum['filename']
             # if args.gector:
             #     composition = gector
@@ -141,6 +138,7 @@ class PDCTorchDataset(Dataset):
             composition = datum['composition']
             correction = datum['correction']
             filename = ''
+            
         # Get image info
         img_info = self.imgid2img[img_id]
         if args.img_feat == 'bottomup':
@@ -182,18 +180,3 @@ class PDCTorchDataset(Dataset):
             return id, filename, feats, boxes, composition, composition_ids, correction, correction_ids
         elif args.img_feat == 'global':
             return id, filename, global_feat, composition, composition_ids, correction, correction_ids
-
-
-# dataset = PDCDataset('synthetic_train') # 201059
-# torch_ds = PDCTorchDataset(dataset)
-
-# dataset = PDCDataset('synthetic_val')# 25014
-# torch_ds = PDCTorchDataset(dataset)
-
-
-
-
-
-
-
-
