@@ -5,3 +5,6 @@ data
 __pycache__
 grounding
 snap
+
+resnet.py
+visualize.py
